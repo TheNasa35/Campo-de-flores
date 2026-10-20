@@ -32,7 +32,7 @@
 /* ---------- Config ----------
    MUSIC_FILE: ruta de la canción (debe estar en la misma carpeta que este archivo).
    Si el archivo no existe o no carga, suena música ambiental generada por código. */
-const MUSIC_FILE = 'Golden Brown.mp3';  // si no quieres música, pon null
+const MUSIC_FILE = 'Golden Brown.mp3';
 const QUOTE_DELAY = 7000;     // ms desde el primer toque hasta que aparece la frase
 const GIF_DELAY = 11000;      // ms desde el primer toque hasta que aparece el caballero
 
@@ -410,7 +410,17 @@ function drop(e) {
   lastDrop = performance.now();
   addFlower(e.clientX, clamp(e.clientY, H * 0.12, H * 0.72), 1);
 }
-cv.addEventListener('pointerdown', e => { e.preventDefault(); if (!started) start(); else drop(e); });
+// En teléfonos el audio solo se desbloquea al levantar el dedo (click), no al apoyarlo (pointerdown).
+cv.addEventListener('click', () => { if (!started) start(); });
+cv.addEventListener('pointerdown', e => { if (!started) return; e.preventDefault(); drop(e); });
+// Si el navegador bloqueó el audio la primera vez, cualquier toque posterior lo reintenta.
+function unlockAudio() {
+  if (!started) return;
+  if (audioEl && audioEl.paused && !document.hidden) audioEl.play().catch(() => {});
+  if (ac && ac.state === 'suspended' && !document.hidden) ac.resume();
+}
+addEventListener('pointerup', unlockAudio);
+addEventListener('click', unlockAudio);
 cv.addEventListener('pointermove', e => { if (e.buttons && started && performance.now() - lastDrop > 140) drop(e); });
 
 /* ---------- Tamaño ---------- */
