@@ -17,13 +17,21 @@
   #msg p.on{opacity:1;transform:none}
   #msg img{display:block;max-height:clamp(90px,18vh,150px);max-width:60vw;width:auto;height:auto;image-rendering:auto;opacity:0;transition:opacity 2.5s ease}
   #msg img.on{opacity:1}
+  #snd{position:fixed;top:max(12px,env(safe-area-inset-top));right:12px;width:42px;height:42px;border-radius:50%;
+    border:1px solid rgba(255,230,150,.35);background:rgba(10,6,20,.55);color:#fff3c4;font-size:18px;line-height:1;
+    padding:0;opacity:0;pointer-events:none;transition:opacity 2s ease;-webkit-tap-highlight-color:transparent;cursor:pointer}
+  #snd.on{opacity:.8;pointer-events:auto}
+  #dbg{position:fixed;left:8px;top:8px;right:60px;display:none;font:11px/1.35 monospace;color:#9fe39f;
+    background:rgba(0,0,0,.7);padding:6px 8px;white-space:pre-wrap;pointer-events:none;z-index:5}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<button id="snd" type="button" aria-label="Sonido">🔊</button>
+<div id="dbg"></div>
 <div id="msg">
   <p id="quote">Las flores amarillas no solo representan la felicidad, sino también la esperanza de que siempre habrá algo bonito esperando por nosotros, incluso después de los días difíciles.</p>
-  <img id="knight" src="darksouls-knight.gif" alt="" onerror="this.remove()">
+  <img id="knight" src="caballero.gif" alt="" onerror="this.remove()">
 </div>
 <script>
 (() => {
@@ -32,7 +40,7 @@
 /* ---------- Config ----------
    MUSIC_FILE: ruta de la canción (debe estar en la misma carpeta que este archivo).
    Si el archivo no existe o no carga, suena música ambiental generada por código. */
-const MUSIC_FILE = 'Golden Brown.mp3';
+const MUSIC_FILE = 'golden-brown.mp3';
 const QUOTE_DELAY = 7000;     // ms desde el primer toque hasta que aparece la frase
 const GIF_DELAY = 11000;      // ms desde el primer toque hasta que aparece el caballero
 
@@ -353,23 +361,17 @@ function sched() {
   }
 }
 
-function startSynth() {
-  if (synthOn || !ac) return;
-  synthOn = true;
-  nextBeat = ac.currentTime + 0.2;
-  setInterval(sched, 200);
+/* Diagnóstico: abre la página con #debug al final de la dirección para ver qué pasa con el audio. */
+function dbg(m) {
+  if (location.hash !== '#debug') return;
+  const d = document.getElementById('dbg');
+  d.style.display = 'block';
+  d.textContent += m + '\n';
 }
 
-function startAudio() {
-  let fileOk = false;
-  if (MUSIC_FILE) {
-    audioEl = new Audio(MUSIC_FILE);
-    audioEl.loop = true; audioEl.volume = 0.8;
-    audioEl.addEventListener('error', () => { audioEl = null; startSynth(); });   // si falta el archivo, cae a la música generada
-    audioEl.play().catch(() => {});
-    fileOk = true;
-  }
-  try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+function ensureCtx() {
+  if (ac) return true;
+  try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { dbg('sin AudioContext'); return false; }
   ac.resume();
   const master = ac.createGain();
   master.gain.setValueAtTime(0, ac.currentTime);
@@ -381,7 +383,30 @@ function startAudio() {
   const fb = ac.createGain(); fb.gain.value = 0.4;
   const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1800;
   bus.connect(d); d.connect(lp); lp.connect(fb); fb.connect(d); lp.connect(master);
-  if (!fileOk) startSynth();
+  return true;
+}
+
+function startSynth() {
+  if (synthOn || !ensureCtx()) return;
+  synthOn = true;
+  dbg('música generada activa (la canción no se cargó)');
+  nextBeat = ac.currentTime + 0.2;
+  setInterval(sched, 200);
+}
+
+function startAudio() {
+  if (!MUSIC_FILE) { startSynth(); return; }
+  // Con la canción real NO se crea AudioContext: en algunos teléfonos puede interferir con el audio normal.
+  audioEl = new Audio(MUSIC_FILE);
+  audioEl.loop = true; audioEl.volume = 0.8; audioEl.preload = 'auto';
+  audioEl.addEventListener('error', () => {
+    dbg('ERROR al cargar "' + MUSIC_FILE + '" (código ' + (audioEl && audioEl.error ? audioEl.error.code : '?') + ')');
+    audioEl = null;
+    startSynth();                                                  // si falta el archivo, cae a la música generada
+  });
+  audioEl.addEventListener('playing', () => dbg('la canción se está reproduciendo'));
+  const p = audioEl.play();
+  if (p && p.then) p.then(() => dbg('play() aceptado')).catch(e => dbg('play() bloqueado: ' + (e && e.name)));
 }
 
 function bloomSound(big) {
@@ -391,15 +416,34 @@ function bloomSound(big) {
   else if (R() < 0.5) tone(mf([79, 81, 84, 86, 88][(R() * 5) | 0]), t, 2.5, 0.055, 'sine', 0.01);
 }
 
+let muted = false;                   // true cuando ella misma pausó el sonido con el botón
 document.addEventListener('visibilitychange', () => {
+  if (muted) return;
   if (ac) { document.hidden ? ac.suspend() : ac.resume(); }
   if (audioEl) { document.hidden ? audioEl.pause() : audioEl.play().catch(() => {}); }
+});
+
+/* Botón de sonido: sirve para pausar y también como gesto directo si el navegador bloqueó el audio */
+const snd = document.getElementById('snd');
+snd.addEventListener('click', e => {
+  e.stopPropagation();
+  const playing = audioEl ? !audioEl.paused : !!(ac && ac.state === 'running');
+  if (playing) {
+    muted = true; snd.textContent = '🔇';
+    if (audioEl) audioEl.pause();
+    if (ac) ac.suspend();
+  } else {
+    muted = false; snd.textContent = '🔊';
+    if (audioEl) audioEl.play().then(() => dbg('play() desde el botón: aceptado')).catch(err => dbg('play() desde el botón falló: ' + (err && err.name)));
+    if (ac) ac.resume();
+  }
 });
 
 /* ---------- Interacción ---------- */
 function start() {
   started = true;
   startAudio();
+  snd.classList.add('on');
   first = addFlower(W / 2, H * 0.4, 2.6, 5);
   nextSpawn = performance.now() + 3500;
   setTimeout(() => document.getElementById('quote').classList.add('on'), QUOTE_DELAY);
@@ -415,7 +459,7 @@ cv.addEventListener('click', () => { if (!started) start(); });
 cv.addEventListener('pointerdown', e => { if (!started) return; e.preventDefault(); drop(e); });
 // Si el navegador bloqueó el audio la primera vez, cualquier toque posterior lo reintenta.
 function unlockAudio() {
-  if (!started) return;
+  if (!started || muted) return;
   if (audioEl && audioEl.paused && !document.hidden) audioEl.play().catch(() => {});
   if (ac && ac.state === 'suspended' && !document.hidden) ac.resume();
 }
